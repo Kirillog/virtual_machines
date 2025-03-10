@@ -1,7 +1,6 @@
 #include <cerrno>
 #include <iostream>
 #include <iomanip>
-#include <new>
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/mman.h>
@@ -9,10 +8,18 @@
 #include <sys/time.h>
 #include <concepts>
 #include <unistd.h>
+#include <signal.h>
 
 using namespace std;
 
-static constexpr size_t PAGE_SIZE = 1024;
+static constexpr size_t PAGE_SIZE = 4096;
+
+static void handler(int sig, siginfo_t *si, void *unused)
+{
+    fprintf(stderr, "Got SIGSEGV at address: 0x%lx\n",(long) si->si_addr);
+    fprintf(stderr, "Probably because of bad allocation\n");
+    exit(EXIT_FAILURE);
+}
 
 /**
  * Returns the current resident set size (physical memory use) measured
@@ -31,7 +38,7 @@ static constexpr size_t PAGE_SIZE = 1024;
     return (size_t)0L;
   }
   fclose( fp );
-  return (size_t)rss * PAGE_SIZE;
+  return (size_t)rss * 1024;
  }
 
 static void get_usage(struct rusage& usage) {
@@ -55,10 +62,11 @@ private:
   char *mempool_, *ptr;
 
 public:
-  static constexpr unsigned long long size = 40ll * 1024 * 4096; 
+  static constexpr unsigned long long size = 40ll * 1024 * PAGE_SIZE; 
 
   MemPoolAllocator() {
     mempool_ = (char *) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    mprotect(mempool_, PAGE_SIZE, PROT_NONE);
     ptr = mempool_ + size;
   }
 
@@ -73,9 +81,6 @@ public:
   explicit MemPoolAllocator(const MemPoolAllocator<U>& other) {}
 
   T *allocate(size_t count) {
-    if (ptr - sizeof(T) * count < mempool_) {
-      throw std::bad_alloc();
-    }
     return (T*)(ptr -= sizeof(T) * count);
   }
 
@@ -151,6 +156,12 @@ public:
 };
 
 int main(const int argc, const char* argv[]) {
+  struct sigaction sa;
+
+  sa.sa_flags = SA_SIGINFO;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_sigaction = handler;
+  sigaction(SIGSEGV, &sa, NULL);
   std::string arg = argv[1];
   cout << arg << ":\n";
   if (arg == "Default") {
