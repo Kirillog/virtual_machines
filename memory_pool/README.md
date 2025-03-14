@@ -9,20 +9,36 @@ cmake --build build --target test
 
 ## Results
 ```sh
-./build/memory_pool/test MemPool
+./build/memory_pool/test MutexedMemPool
 
-MemPool:
-Time used: 375342 usec
-Memory used: 162695168 bytes
-Mem required: 160000000 bytes
-Overhead:  1.7%
+MutexedMemPool:
+Time used: 54284273 usec
+Memory used: 2563198976 bytes
+Mem required: 2560000000 bytes
+Overhead:  0.1%
+
+./build/memory_pool/test LockFreeMemPool
+
+LockFreeMemPool:
+Time used: 155452038 usec
+Memory used: 2563171328 bytes
+Mem required: 2560000000 bytes
+Overhead:  0.1%
+
+./build/memory_pool/test LocalMemPool
+
+LocalMemPool:
+Time used: 10083357 usec
+Memory used: 2563232768 bytes
+Mem required: 2560000000 bytes
+Overhead:  0.1%
 
 ./build/memory_pool/test Default
 
 Default:
-Time used: 518690 usec
-Memory used: 322915328 bytes
-Mem required: 160000000 bytes
-Overhead: 50.5%
+Time used: 16938203 usec
+Memory used: 5123203072 bytes
+Mem required: 2560000000 bytes
+Overhead: 50.0%
 ```
 
