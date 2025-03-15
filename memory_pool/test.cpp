@@ -26,9 +26,12 @@ static const char str[] = "Got SIGSEGV, probably because of bad allocation at ";
 struct AllocArea {
   char *begin;
   size_t size;
+  int type;
+  int id;
 };
 
-static AllocArea areas[3] = {};
+static int allocator_id = 0;
+static std::vector<AllocArea> areas;
 
 static const char *allocName[] = {
   "Default",
@@ -37,19 +40,43 @@ static const char *allocName[] = {
   "LockFreeMemPoolAllocator"
 };
 
+static char * itoa(int val, char *buf)
+{
+  int length = 0;
+  int _val = val;
+  do {
+    ++length;
+    _val /= 10;
+  } while (_val);
+  buf += length;
+  *buf = 0;
+  do {
+    --buf;
+    *buf = '0' + val % 10;
+    val /= 10;
+  } while (val);
+  return buf;
+}
+
 static void handler(int, siginfo_t *si, void *)
 {
-  int id = -1;
+  int type = -1;
+  int id = 0;
   char * ptr = (char *)si->si_addr;
-  for (int i = 0; i < 3; ++i) {
+  for (size_t i = 0; i < areas.size(); ++i) {
     if (areas[i].begin < ptr && ptr < areas[i].begin + areas[i].size) {
-      id = i;
+      type = areas[i].type;
+      id = areas[i].id;
       break;
     }
   }
-  const char * allocator_name = allocName[id + 1];
+  const char * allocator_name = allocName[type + 1];
+  char buf[10];
+  const char *id_str = itoa(id, buf);
   write(STDERR_FILENO, str, sizeof(str) - 1);
   write(STDERR_FILENO, allocator_name, std::strlen(allocator_name));
+  write(STDERR_FILENO, "#", 1);
+  write(STDERR_FILENO, id_str, std::strlen(id_str));
   write(STDERR_FILENO, "\n", 1);
   exit(EXIT_FAILURE);
 }
@@ -99,17 +126,18 @@ class MemPoolAllocator : public std::allocator<T> {
 private:
   char *mempool_, *ptr;
   unsigned long long size;
-  static constexpr int id = 0; 
+  int id;
+  static constexpr int type = 0; 
 
 public:
   static constexpr unsigned long long defaultSize = 128ll * 1024 * PAGE_SIZE; 
 
-  MemPoolAllocator() {
+  MemPoolAllocator() : id(allocator_id++) {
     size = hintElemCount == 0 ? defaultSize : (roundToPageSize(hintElemCount * sizeof(T) + PAGE_SIZE));
     mempool_ = (char *) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     mprotect(mempool_, PAGE_SIZE, PROT_NONE);
     ptr = mempool_ + size;
-    areas[id] = {mempool_, size};
+    areas.emplace_back(mempool_, size, type, id);
   }
 
   ~MemPoolAllocator() {
@@ -153,18 +181,19 @@ class MutexedMemPoolAllocator : public std::allocator<T> {
 private:
   char *mempool_, *ptr;
   unsigned long long size;
-  static constexpr int id = 1; 
+  int id;
+  static constexpr int type = 1;
   std::mutex m_;
 
 public:
   static constexpr unsigned long long defaultSize = 128ll * 1024 * PAGE_SIZE; 
 
-  MutexedMemPoolAllocator() {
+  MutexedMemPoolAllocator(): id(allocator_id++)  {
     size = hintElemCount == 0 ? defaultSize : (roundToPageSize(hintElemCount * sizeof(T) + PAGE_SIZE));
     mempool_ = (char *) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     mprotect(mempool_, PAGE_SIZE, PROT_NONE);
     ptr = mempool_ + size;
-    areas[id] = {mempool_, size};
+    areas.emplace_back(mempool_, size, type, id);
   }
 
   ~MutexedMemPoolAllocator() {
@@ -210,17 +239,18 @@ private:
   char *mempool_;
   std::atomic<char*> ptr;
   unsigned long long size;
-  static constexpr int id = 2;
+  int id;
+  static constexpr int type = 2;
 
 public:
   static constexpr unsigned long long defaultSize = 128ll * 1024 * PAGE_SIZE; 
 
-  LockFreeMemPoolAllocator() {
+  LockFreeMemPoolAllocator() : id(allocator_id++) {
     size = hintElemCount == 0 ? defaultSize : (roundToPageSize(hintElemCount * sizeof(T) + PAGE_SIZE));
     mempool_ = (char *) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     mprotect(mempool_, PAGE_SIZE, PROT_NONE);
     ptr = mempool_ + size;
-    areas[id] = {mempool_, size};
+    areas.emplace_back(mempool_, size, type, id);
   }
 
   ~LockFreeMemPoolAllocator() {
@@ -294,10 +324,11 @@ static inline void test(unsigned n, bool local = false) {
   auto start_mem = getCurrentRSS();
   if (local) {
     hintElemCount = n;
+    areas.reserve(threadsNum);
     std::vector<std::jthread> threads;
     threads.reserve(threadsNum);
     for (int i = 0; i < threadsNum; ++i) {
-      threads.emplace_back([=](){
+      threads.emplace_back([n](){
         Allocator<Node> allocator;
         auto list = List<Allocator<Node>>(n, allocator);
       });
