@@ -20,8 +20,8 @@ Overhead:  0.1%
 ./build/memory_pool/test LockFreeMemPool
 
 LockFreeMemPool:
-Time used: 155452038 usec
-Memory used: 2563171328 bytes
+Time used: 24994964 usec
+Memory used: 2563203072 bytes
 Mem required: 2560000000 bytes
 Overhead:  0.1%
 

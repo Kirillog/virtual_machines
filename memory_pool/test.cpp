@@ -1,5 +1,6 @@
 #include <cerrno>
 #include <cstring>
+#include <cstdlib>
 #include <iostream>
 #include <iomanip>
 #include <memory>
@@ -20,14 +21,35 @@ using namespace std;
 
 static constexpr size_t PAGE_SIZE = 4096;
 
-std::string allocator_name = "Default";
-
 static const char str[] = "Got SIGSEGV, probably because of bad allocation at "; 
 
-static void handler(int sig, siginfo_t *si, void *unused)
+struct AllocArea {
+  char *begin;
+  size_t size;
+};
+
+static AllocArea areas[3] = {};
+
+static const char *allocName[] = {
+  "Default",
+  "MemPoolAllocator",
+  "MutexedMemPoolAllocator",
+  "LockFreeMemPoolAllocator"
+};
+
+static void handler(int, siginfo_t *si, void *)
 {
+  int id = -1;
+  char * ptr = (char *)si->si_addr;
+  for (int i = 0; i < 3; ++i) {
+    if (areas[i].begin < ptr && ptr < areas[i].begin + areas[i].size) {
+      id = i;
+      break;
+    }
+  }
+  const char * allocator_name = allocName[id + 1];
   write(STDERR_FILENO, str, sizeof(str) - 1);
-  write(STDERR_FILENO, allocator_name.c_str(), allocator_name.size());
+  write(STDERR_FILENO, allocator_name, std::strlen(allocator_name));
   write(STDERR_FILENO, "\n", 1);
   exit(EXIT_FAILURE);
 }
@@ -77,6 +99,7 @@ class MemPoolAllocator : public std::allocator<T> {
 private:
   char *mempool_, *ptr;
   unsigned long long size;
+  static constexpr int id = 0; 
 
 public:
   static constexpr unsigned long long defaultSize = 128ll * 1024 * PAGE_SIZE; 
@@ -86,6 +109,7 @@ public:
     mempool_ = (char *) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     mprotect(mempool_, PAGE_SIZE, PROT_NONE);
     ptr = mempool_ + size;
+    areas[id] = {mempool_, size};
   }
 
   ~MemPoolAllocator() {
@@ -97,13 +121,13 @@ public:
   MemPoolAllocator& operator=(const MemPoolAllocator&) = delete;
 
   template <class U>
-  explicit MemPoolAllocator(const MemPoolAllocator<U>& other) {}
+  explicit MemPoolAllocator(const MemPoolAllocator<U>&) {}
 
   T *allocate(size_t count) {
     return (T*)(ptr -= sizeof(T) * count);
   }
 
-  void deallocate(T* ptr, size_t) {
+  void deallocate(T*, size_t) {
     // do nothing
   }
 
@@ -129,6 +153,7 @@ class MutexedMemPoolAllocator : public std::allocator<T> {
 private:
   char *mempool_, *ptr;
   unsigned long long size;
+  static constexpr int id = 1; 
   std::mutex m_;
 
 public:
@@ -139,6 +164,7 @@ public:
     mempool_ = (char *) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     mprotect(mempool_, PAGE_SIZE, PROT_NONE);
     ptr = mempool_ + size;
+    areas[id] = {mempool_, size};
   }
 
   ~MutexedMemPoolAllocator() {
@@ -150,14 +176,14 @@ public:
   MutexedMemPoolAllocator& operator=(const MutexedMemPoolAllocator&) = delete;
 
   template <class U>
-  explicit MutexedMemPoolAllocator(const MutexedMemPoolAllocator<U>& other) {}
+  explicit MutexedMemPoolAllocator(const MutexedMemPoolAllocator<U>&) {}
 
   T *allocate(size_t count) {
     std::lock_guard lock{m_};
     return (T*)(ptr -= sizeof(T) * count);
   }
 
-  void deallocate(T* ptr, size_t) {
+  void deallocate(T*, size_t) {
     // do nothing
   }
 
@@ -184,6 +210,7 @@ private:
   char *mempool_;
   std::atomic<char*> ptr;
   unsigned long long size;
+  static constexpr int id = 2;
 
 public:
   static constexpr unsigned long long defaultSize = 128ll * 1024 * PAGE_SIZE; 
@@ -193,6 +220,7 @@ public:
     mempool_ = (char *) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     mprotect(mempool_, PAGE_SIZE, PROT_NONE);
     ptr = mempool_ + size;
+    areas[id] = {mempool_, size};
   }
 
   ~LockFreeMemPoolAllocator() {
@@ -204,19 +232,13 @@ public:
   LockFreeMemPoolAllocator& operator=(const LockFreeMemPoolAllocator&) = delete;
 
   template <class U>
-  explicit LockFreeMemPoolAllocator(const LockFreeMemPoolAllocator<U>& other) {}
+  explicit LockFreeMemPoolAllocator(const LockFreeMemPoolAllocator<U>&) {}
 
   T *allocate(size_t count) {
-    while (true) {
-      char *old_ptr = ptr.load(std::memory_order_release);
-      char *new_ptr = old_ptr - sizeof(T) * count;
-      if (ptr.compare_exchange_weak(old_ptr, new_ptr, std::memory_order_acquire)) {
-        return (T*)new_ptr;
-      }
-    }
+    return (T*)(ptr.fetch_sub(sizeof(T) * count, std::memory_order_relaxed) - sizeof(T) * count);
   }
 
-  void deallocate(T* ptr, size_t) {
+  void deallocate(T*, size_t) {
     // do nothing
   }
 
@@ -316,16 +338,16 @@ static inline void test(unsigned n, bool local = false) {
 }
 
 
-int main(const int argc, const char* argv[]) {
+int main(const int, const char* argv[]) {
   struct sigaction sa;
   sa.sa_flags = SA_SIGINFO;
   sigemptyset(&sa.sa_mask);
   sa.sa_sigaction = handler;
   sigaction(SIGSEGV, &sa, NULL);
 
-  constexpr int n = 10'000'000;
+  constexpr int n = 1'000'000;
 
-  allocator_name = argv[1];
+  std::string allocator_name = argv[1];
   cout << allocator_name << ":\n";
   if (allocator_name == "Default") {
     test<std::allocator>(n);
