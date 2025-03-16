@@ -4,6 +4,7 @@
 #include <iostream>
 #include <iomanip>
 #include <memory>
+#include <stdexcept>
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/mman.h>
@@ -16,29 +17,17 @@
 #include <mutex>
 #include <atomic>
 #include <vector>
+#include <array>
 
 using namespace std;
 
-static constexpr size_t PAGE_SIZE = 4096;
+static constexpr size_t PAGE_SIZE = 1 << 12;
+static constexpr size_t MAX_ALLOCATORS = 20;
+static constexpr unsigned long long PAGE_PTR_MASK = (-1ll) ^ ((1 << 12) - 1);
 
 static const char str[] = "Got SIGSEGV, probably because of bad allocation at "; 
 
-struct AllocArea {
-  char *begin;
-  size_t size;
-  int type;
-  int id;
-};
-
-static int allocator_id = 0;
-static std::vector<AllocArea> areas;
-
-static const char *allocName[] = {
-  "Default",
-  "MemPoolAllocator",
-  "MutexedMemPoolAllocator",
-  "LockFreeMemPoolAllocator"
-};
+static std::array<std::atomic<const void*>, MAX_ALLOCATORS> areas{};
 
 static char * itoa(int val, char *buf)
 {
@@ -60,24 +49,24 @@ static char * itoa(int val, char *buf)
 
 static void handler(int, siginfo_t *si, void *)
 {
-  int type = -1;
-  int id = 0;
-  char * ptr = (char *)si->si_addr;
+  int id = -1;
+  char * aligned_ptr = (char *)((unsigned long long)si->si_addr & PAGE_PTR_MASK);
   for (size_t i = 0; i < areas.size(); ++i) {
-    if (areas[i].begin < ptr && ptr < areas[i].begin + areas[i].size) {
-      type = areas[i].type;
-      id = areas[i].id;
+    if (areas[i].load(std::memory_order_relaxed) == aligned_ptr) {
+      id = i;
       break;
     }
   }
-  const char * allocator_name = allocName[type + 1];
-  char buf[10];
-  const char *id_str = itoa(id, buf);
-  write(STDERR_FILENO, str, sizeof(str) - 1);
-  write(STDERR_FILENO, allocator_name, std::strlen(allocator_name));
-  write(STDERR_FILENO, "#", 1);
-  write(STDERR_FILENO, id_str, std::strlen(id_str));
-  write(STDERR_FILENO, "\n", 1);
+  if (id == -1) {
+    write(STDERR_FILENO, "Default Allocator\n", 18);
+  } else {
+    char buf[10];
+    const char *id_str = itoa(id, buf);
+    write(STDERR_FILENO, str, sizeof(str) - 1);
+    write(STDERR_FILENO, "Allocator#", 10);
+    write(STDERR_FILENO, id_str, std::strlen(id_str));
+    write(STDERR_FILENO, "\n", 1);
+  }
   exit(EXIT_FAILURE);
 }
 
@@ -132,15 +121,26 @@ private:
 public:
   static constexpr unsigned long long defaultSize = 128ll * 1024 * PAGE_SIZE; 
 
-  MemPoolAllocator() : id(allocator_id++) {
+  MemPoolAllocator() {
     size = hintElemCount == 0 ? defaultSize : (roundToPageSize(hintElemCount * sizeof(T) + PAGE_SIZE));
     mempool_ = (char *) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     mprotect(mempool_, PAGE_SIZE, PROT_NONE);
     ptr = mempool_ + size;
-    areas.emplace_back(mempool_, size, type, id);
+    id = -1;
+    for (size_t i = 0; i < MAX_ALLOCATORS; ++i) {
+      const void* exp = nullptr;
+      if (areas[i].compare_exchange_weak(exp, mempool_, std::memory_order_relaxed)) {
+        id = i;
+        break;
+      }
+    }
+    if (id == -1) {
+      throw std::invalid_argument("Too many allocators at the same time");
+    }
   }
 
   ~MemPoolAllocator() {
+    areas[id].store(nullptr, std::memory_order_relaxed);
     munmap(mempool_, size);
   }
 
@@ -188,15 +188,26 @@ private:
 public:
   static constexpr unsigned long long defaultSize = 128ll * 1024 * PAGE_SIZE; 
 
-  MutexedMemPoolAllocator(): id(allocator_id++)  {
+  MutexedMemPoolAllocator() {
     size = hintElemCount == 0 ? defaultSize : (roundToPageSize(hintElemCount * sizeof(T) + PAGE_SIZE));
     mempool_ = (char *) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     mprotect(mempool_, PAGE_SIZE, PROT_NONE);
     ptr = mempool_ + size;
-    areas.emplace_back(mempool_, size, type, id);
+    id = -1;
+    for (size_t i = 0; i < MAX_ALLOCATORS; ++i) {
+      const void* exp = nullptr;
+      if (areas[i].compare_exchange_weak(exp, mempool_, std::memory_order_relaxed)) {
+        id = i;
+        break;
+      }
+    }
+    if (id == -1) {
+      throw std::invalid_argument("Too many allocators at the same time");
+    }
   }
 
   ~MutexedMemPoolAllocator() {
+    areas[id].store(nullptr, std::memory_order_relaxed);
     munmap(mempool_, size);
   }
 
@@ -245,15 +256,26 @@ private:
 public:
   static constexpr unsigned long long defaultSize = 128ll * 1024 * PAGE_SIZE; 
 
-  LockFreeMemPoolAllocator() : id(allocator_id++) {
+  LockFreeMemPoolAllocator() {
     size = hintElemCount == 0 ? defaultSize : (roundToPageSize(hintElemCount * sizeof(T) + PAGE_SIZE));
     mempool_ = (char *) mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     mprotect(mempool_, PAGE_SIZE, PROT_NONE);
     ptr = mempool_ + size;
-    areas.emplace_back(mempool_, size, type, id);
+    id = -1;
+    for (size_t i = 0; i < MAX_ALLOCATORS; ++i) {
+      const void* exp = nullptr;
+      if (areas[i].compare_exchange_weak(exp, mempool_, std::memory_order_relaxed)) {
+        id = i;
+        break;
+      }
+    }
+    if (id == -1) {
+      throw std::invalid_argument("Too many allocators at the same time");
+    }
   }
 
   ~LockFreeMemPoolAllocator() {
+    areas[id].store(nullptr, std::memory_order_relaxed);
     munmap(mempool_, size);
   }
 
@@ -324,7 +346,6 @@ static inline void test(unsigned n, bool local = false) {
   auto start_mem = getCurrentRSS();
   if (local) {
     hintElemCount = n;
-    areas.reserve(threadsNum);
     std::vector<std::jthread> threads;
     threads.reserve(threadsNum);
     for (int i = 0; i < threadsNum; ++i) {
@@ -360,7 +381,7 @@ static inline void test(unsigned n, bool local = false) {
   uint64_t mem_used = finish.ru_maxrss * 1024 - start_mem;
   cout << "Memory used: " << mem_used << " bytes\n";
 
-  auto mem_required = threadsNum * n * sizeof(Node);
+  auto mem_required = std::min(threadsNum * n * sizeof(Node), mem_used);
 
   cout << "Mem required: " << mem_required << " bytes\n";
   auto overhead = (mem_used - mem_required) * double(100) / mem_used;
