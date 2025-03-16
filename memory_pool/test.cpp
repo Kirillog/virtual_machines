@@ -25,7 +25,7 @@ static constexpr size_t PAGE_SIZE = 1 << 12;
 static constexpr size_t MAX_ALLOCATORS = 20;
 static constexpr unsigned long long PAGE_PTR_MASK = (-1ll) ^ ((1 << 12) - 1);
 
-static const char str[] = "Got SIGSEGV, probably because of bad allocation at "; 
+static const char str[] = "Got SIGSEGV, probably because of bad allocation at Allocator#"; 
 
 static std::array<std::atomic<const void*>, MAX_ALLOCATORS> areas{};
 
@@ -47,7 +47,9 @@ static char * itoa(int val, char *buf)
   return buf;
 }
 
-static void handler(int, siginfo_t *si, void *)
+static void (*old_handler)(int, siginfo_t *, void *);
+
+static void handler(int signum, siginfo_t *si, void *p)
 {
   int id = -1;
   char * aligned_ptr = (char *)((unsigned long long)si->si_addr & PAGE_PTR_MASK);
@@ -58,16 +60,15 @@ static void handler(int, siginfo_t *si, void *)
     }
   }
   if (id == -1) {
-    write(STDERR_FILENO, "Default Allocator\n", 18);
+    old_handler(signum, si, p);
   } else {
     char buf[10];
     const char *id_str = itoa(id, buf);
     write(STDERR_FILENO, str, sizeof(str) - 1);
-    write(STDERR_FILENO, "Allocator#", 10);
     write(STDERR_FILENO, id_str, std::strlen(id_str));
     write(STDERR_FILENO, "\n", 1);
+    exit(EXIT_FAILURE);
   }
-  exit(EXIT_FAILURE);
 }
 
 /**
@@ -395,7 +396,10 @@ int main(const int, const char* argv[]) {
   sa.sa_flags = SA_SIGINFO;
   sigemptyset(&sa.sa_mask);
   sa.sa_sigaction = handler;
-  sigaction(SIGSEGV, &sa, NULL);
+
+  struct sigaction oa;
+  sigaction(SIGSEGV, &sa, &oa);
+  old_handler = oa.sa_sigaction;
 
   constexpr int n = 1'000'000;
 
