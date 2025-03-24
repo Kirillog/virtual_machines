@@ -49,6 +49,22 @@ TEST(AssignTest, StringHandle) {
   ManualFree(h1);
 }
 
+TEST(AssignTest, LeftNull) {
+  StringHandle h;
+  h = "foo";
+  EXPECT_EQ(h.Count(), 1);
+  EXPECT_STREQ(h.get(), "foo");
+  EXPECT_EQ(h.DeallocCount(), 0);
+}
+
+TEST(AssignTest, RightNull) {
+  StringHandle h{"foo"};
+  h = StringHandle{};
+  EXPECT_EQ(h.Count(), 2);
+  EXPECT_EQ(h.get(), nullptr);
+  EXPECT_EQ(h.DeallocCount(), 1);
+}
+
 TEST(AssignMoveTest, StringHandle) {
   StringHandle h1{"hello"};
   h1 = StringHandle{"world"};
@@ -56,7 +72,6 @@ TEST(AssignMoveTest, StringHandle) {
   EXPECT_EQ(h1.Count(), 1);
   EXPECT_EQ(h1.DeallocCount(), 1);
 }
-
 
 TEST(SmokeTest, ThreePlusStrings) {
   StringHandle h1{"hello"};
@@ -73,6 +88,20 @@ TEST(SmokeTest, HeapAllocatedString) {
   StringHandle h{str.c_str()};
   EXPECT_EQ(h.Count(), 1);
   EXPECT_STREQ(h.get(), str.c_str());
+}
+
+TEST(SmokeTest, SelfRef) {
+  StringHandle h{"foo"};
+  h = h;
+  EXPECT_EQ(h.Count(), 1);
+  EXPECT_EQ(h.DeallocCount(), 0);
+}
+
+TEST(SmokeTest, SelfMoveRef) {
+  StringHandle h{"foo"};
+  h = std::move(h);
+  EXPECT_EQ(h.Count(), 1);
+  EXPECT_EQ(h.DeallocCount(), 0);
 }
 
 TEST(SortTest, Bubble) {

@@ -18,6 +18,7 @@ public:
 
     friend std::ostream& operator<<(std::ostream& out, const StringHandle& a);
 
+
     inline int Count() const {
         return !(reinterpret_cast<std::uint64_t>(str) & 1) + 1;
     }
@@ -38,12 +39,20 @@ private:
         }
     }
 
+    inline std::uintptr_t& Ptr() {
+        return reinterpret_cast<std::uintptr_t&>(str);
+    }
+
+    inline std::uintptr_t Ptr() const {
+        return reinterpret_cast<std::uintptr_t>(str);
+    }
+
     inline void IncCount() {
-        str = reinterpret_cast<char *>(reinterpret_cast<std::uint64_t>(str) & (-2ull));
+        Ptr() = Ptr() & (-2ull);
     }
 
     inline bool OneOwner() const {
-        return reinterpret_cast<std::uint64_t>(str) & 1;
+        return Ptr() & 1;
     }
 private:
     char *str{nullptr};
