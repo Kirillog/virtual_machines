@@ -50,7 +50,7 @@ TEST(AssignTest, StringHandle) {
 }
 
 TEST(AssignTest, LeftNull) {
-  StringHandle h;
+  StringHandle h{nullptr};
   h = "foo";
   EXPECT_EQ(h.Count(), 1);
   EXPECT_STREQ(h.get(), "foo");
@@ -59,7 +59,7 @@ TEST(AssignTest, LeftNull) {
 
 TEST(AssignTest, RightNull) {
   StringHandle h{"foo"};
-  h = StringHandle{};
+  h = nullptr;
   EXPECT_EQ(h.Count(), 2);
   EXPECT_EQ(h.get(), nullptr);
   EXPECT_EQ(h.DeallocCount(), 1);
@@ -121,9 +121,7 @@ TEST(SortTest, Bubble) {
   for (size_t i = 1; i < strings.size(); ++i) {
     for (size_t j = i; j > 0; --j) {
       if (strcmp(strings[j].get(), strings[j - 1].get()) < 0) {
-        StringHandle temp = std::move(strings[j]);
-        strings[j] = std::move(strings[j - 1]);
-        strings[j - 1] = std::move(temp);
+        std::swap(strings[j], strings[j - 1]);
       }
     }
   }

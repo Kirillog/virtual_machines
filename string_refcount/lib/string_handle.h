@@ -1,35 +1,60 @@
 #pragma once
 #include <ostream>
+#include <cstring>
 
 class StringHandle {
 public:
-    StringHandle();
-    StringHandle(const char *str);
-    StringHandle(StringHandle& oth);
-    StringHandle(StringHandle&& oth);
+    StringHandle() : str(nullptr) {}
+
+    StringHandle(const char *str) {
+        ConstructFromCString(str);
+    }
+
+    StringHandle(StringHandle& oth) {
+        oth.IncCount();
+        this->str = oth.str;
+    }
+    
+    StringHandle(StringHandle&& oth) : str(oth.str) {
+        oth.str = nullptr;
+    }
 
     StringHandle& operator=(StringHandle&& oth);
     StringHandle& operator=(StringHandle& oth);
     StringHandle& operator=(const char *str);
 
-    const char *get() const;
+    const char *get() const {
+        return reinterpret_cast<const char *>(Ptr() & ALIGNED_PTR_MASK);
+    }
 
-    ~StringHandle();
+    ~StringHandle() {
+        FreeIfRequired();    
+    }
 
     friend std::ostream& operator<<(std::ostream& out, const StringHandle& a);
 
-
-    inline int Count() const {
-        return !(reinterpret_cast<std::uint64_t>(str) & 1) + 1;
+    int Count() const {
+        return !(Ptr() & 1) + 1;
     }
 
     #ifdef DEBUG
-    inline int DeallocCount() const {
+    int DeallocCount() const {
         return dealloc_count;
     }
     #endif
 private:
-    inline void FreeIfRequired() {
+    void ConstructFromCString(const char *str) {
+        if (str == nullptr) {
+            Ptr() = 0;
+            return;
+        }
+        auto length = std::strlen(str) + 1;
+        this->str = new char[length];
+        std::memcpy(this->str, str, length);
+        Ptr() = Ptr() | 1;
+    }
+
+    void FreeIfRequired() {
         if (OneOwner()) {
             #ifdef DEBUG
             fprintf(stderr, "Free str: %s, count: %i\n", get(), Count());
@@ -39,21 +64,24 @@ private:
         }
     }
 
-    inline std::uintptr_t& Ptr() {
+    std::uintptr_t& Ptr() {
         return reinterpret_cast<std::uintptr_t&>(str);
     }
 
-    inline std::uintptr_t Ptr() const {
+    std::uintptr_t Ptr() const {
         return reinterpret_cast<std::uintptr_t>(str);
     }
 
-    inline void IncCount() {
-        Ptr() = Ptr() & (-2ull);
+    void IncCount() {
+        Ptr() &= ALIGNED_PTR_MASK;
     }
 
-    inline bool OneOwner() const {
+    bool OneOwner() const {
         return Ptr() & 1;
     }
+
+    static constexpr uintptr_t ALIGNED_PTR_MASK = -2ul;
+
 private:
     char *str{nullptr};
     #ifdef DEBUG
