@@ -11,3 +11,4 @@ set(CMAKE_CXX_STANDARD 20)
 
 add_subdirectory(memory_pool)
 add_subdirectory(string_refcount)
+add_subdirectory(mem_cpy)
